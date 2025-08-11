@@ -1,709 +1,393 @@
-"use  client"
-import React, { useState, useEffect } from 'react';
-// Correctly importing app and database instances from your specified path
-import { app, database } from '../lib/firebase';
+'use client';
+import React, { useState, useEffect, useRef } from 'react';
+// Import Firebase instances directly from your firebase.ts file
+import { app, database } from '../lib/firebase'; // Adjusted path to ../lib/firebase as requested
+
 import { ref, onValue, remove, set, get } from 'firebase/database';
-import { Shield, Phone, Heart, Zap, AlertTriangle, MapPin, Clock, Users, CheckCircle, Star, ArrowRight, Car, Bike, Droplets, Mic, Bell, Waves, Cpu, Volume2, Send, Play, TrendingUp, Award, Target } from 'lucide-react';
+// IMPORTANT: Dynamically import MapContainer and related components with ssr: false
+import dynamic from 'next/dynamic';
+// Removed direct import of L from 'leaflet' here
+import 'leaflet/dist/leaflet.css';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { MapPin, Trash2, AlertTriangle, Navigation, LocateFixed, ArrowLeft, Map } from 'lucide-react';
+import { Toaster, toast } from 'sonner';
 
-function App() {
-  // State to hold the accident location data
-  const [accedentLocation, setAccedentLocation] = useState({ lat: "Loading...", long: "Loading..." });
+// Add global styles for Leaflet popups to ensure readability
+const globalLeafletStyles = `
+  .custom-popup .leaflet-popup-content-wrapper {
+    background-color: rgba(255, 255, 255, 0.9); /* Slightly transparent white background */
+    color: #333; /* Dark text color */
+    border-radius: 8px;
+    padding: 10px;
+    font-family: 'Inter', sans-serif; /* Ensure consistent font */
+  }
+  .custom-popup .leaflet-popup-content {
+    margin: 0;
+  }
+  .custom-popup .leaflet-popup-tip {
+    background-color: rgba(255, 255, 255, 0.9);
+  }
+`;
 
-  // --- Firebase Data Operations ---
+// Define the core data structure for a single location
+interface LocationData {
+  lat: number;
+  long: number;
+  timestamp: number;
+}
 
-  // 1. Real-time listener using 'onValue'
-  // This effect runs once on component mount to listen for real-time changes
+// Define the props for the MapView component
+interface MapViewProps {
+  location: LocationData | null;
+  onBack: () => void;
+}
+
+// A small component to handle map centering and view adjustments
+// IMPORTANT: This component needs to be rendered only on the client.
+const MapEvents = dynamic(() => import('react-leaflet').then(mod => {
+  const { useMap } = mod;
+  function MapEventsComponent({ location }: { location: MapViewProps['location'] }) {
+    const map = useMap();
+    useEffect(() => {
+      if (location) {
+        map.setView([location.lat, location.long], 13);
+      }
+    }, [location, map]);
+    return null;
+  }
+  return MapEventsComponent;
+}), { ssr: false });
+
+// MapView component to display the location(s) on a map
+// IMPORTANT: This component needs to be rendered only on the client.
+const MapView = dynamic(() => import('react-leaflet').then(mod => {
+  const { MapContainer, TileLayer, Marker, Popup } = mod;
+  // Import L here, inside the dynamic import's scope
+  const L = require('leaflet');
+
+  // Create a custom icon for the map markers here
+  const redIcon = new L.Icon({
+    iconUrl: 'https://cdn.rawgit.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41]
+  });
+
+  // This is the actual MapView component content
+  const MapViewComponent = ({ location, onBack }: MapViewProps) => {
+    const initialPosition: [number, number] = location ? [location.lat, location.long] : [19.09719, 72.88258];
+    const markerRef = useRef<L.Marker>(null); // Ref for the marker
+    const prevLocationRef = useRef<LocationData | null>(null);
+
+    useEffect(() => {
+      if (location && markerRef.current) {
+        const prevLocation = prevLocationRef.current;
+        const coordsChanged = !prevLocation ||
+                              location.lat !== prevLocation.lat ||
+                              location.long !== prevLocation.long;
+
+        if (coordsChanged) {
+          markerRef.current.openPopup();
+        }
+        prevLocationRef.current = location;
+      } else if (!location && prevLocationRef.current) {
+        prevLocationRef.current = null;
+      }
+    }, [location]);
+
+    return (
+      <div className="relative w-full h-screen">
+        <style>{globalLeafletStyles}</style>
+        <MapContainer
+          center={initialPosition}
+          zoom={13}
+          className="w-full h-full"
+          style={{ height: '100vh', width: '100vw' }}
+        >
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          />
+          {location && (
+            <Marker ref={markerRef} position={[location.lat, location.long]} icon={redIcon}>
+              <Popup className="custom-popup">
+                <div className="text-red-600 font-bold text-lg">🚨 NEW ACCIDENT OCCURRED!</div>
+                <br/>
+                Latitude: {location.lat.toFixed(6)}<br/>
+                Longitude: {location.long.toFixed(6)}<br/>
+                Last Update: {new Date(location.timestamp).toLocaleString()}
+              </Popup>
+            </Marker>
+          )}
+          <MapEvents location={location} />
+        </MapContainer>
+        <div className="absolute top-4 left-4 z-[1000]">
+          <Button onClick={onBack} className="flex items-center gap-2 bg-slate-900/70 text-white hover:bg-slate-800">
+            <ArrowLeft className="h-4 w-4" /> Back to Dashboard
+          </Button>
+        </div>
+      </div>
+    );
+  };
+  return MapViewComponent;
+}), { ssr: false });
+
+
+export default function Home() {
+  const [accidentLocation, setAccidentLocation] = useState<LocationData | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [viewingMap, setViewingMap] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
+
+  // Subscribe to real-time database updates
   useEffect(() => {
-    // Create a reference to the 'accedentlocation' path in the database
-    const accedentRef = ref(database, 'accedentlocation');
+    if (!database) return;
 
-    // Attach a real-time listener to the reference
-    onValue(accedentRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        // If data exists, update the component's state
-        setAccedentLocation(data);
-      } else {
-        // If no data exists, set a default state
-        console.log("No accident location data available in real-time.");
-        setAccedentLocation({ lat: "N/A", long: "N/A" });
+    const accidentLocationRef = ref(database, 'accedentlocation');
+
+    const checkAndSetInitialData = async () => {
+      try {
+        const snapshot = await get(accidentLocationRef);
+        if (!snapshot.exists()) {
+          // Only set initial dummy data if no data exists
+          await set(accidentLocationRef, {
+            lat: 19.09719,
+            long: 72.88258,
+            timestamp: Date.now(),
+          });
+          console.log("Initial dummy accident location set.");
+        }
+      } catch (error) {
+        console.error("Error checking or setting initial data:", error);
+        toast.error('Data Init Error', {
+          description: 'Failed to initialize data. Please check Firebase rules.',
+        });
+      } finally {
+        setDataLoaded(true);
       }
-    }, (error) => {
-      // Handle any errors during the fetch
-      console.error("Error fetching accident location in real-time:", error);
-      setAccedentLocation({ lat: "Error", long: "Error" });
-    });
+    };
 
-    // The return function is a cleanup function.
-    // It's good practice for detaching listeners to prevent memory leaks,
-    // though in this simple case it's not strictly required.
-    return () => {}; 
-  }, []); // The empty dependency array ensures this effect runs only once
+    // Ensure initial data check only happens once
+    if (!dataLoaded) {
+      checkAndSetInitialData();
+    }
 
-  // 2. Function to fetch data once using 'get'
-  const fetchAccidentLocationOnce = async () => {
-    const accedentRef = ref(database, 'accedentlocation');
-    try {
-      const snapshot = await get(accedentRef);
-      if (snapshot.exists()) {
+    const unsubscribe = onValue(
+      accidentLocationRef,
+      (snapshot) => {
+        setIsConnected(true);
         const data = snapshot.val();
-        console.log("Accident location fetched once:", data);
-        // This log will appear in the console. You can use this data
-        // to update state or for other one-time operations.
-      } else {
-        console.log("No accident location data available on single fetch.");
+
+        // This toast logic still relies on timestamp change to avoid spamming toasts
+        // for every minor data change if the timestamp isn't updated by the source.
+        // The map popup will now trigger on lat/long change.
+        if (data && (accidentLocation?.timestamp !== data.timestamp)) {
+          toast.error('🚨 EMERGENCY ALERT', {
+            description: `Incident detected at coordinates ${data.lat?.toFixed(6)}, ${data.long?.toFixed(6)}. Emergency responders dispatched immediately. Proceed with caution - situation requires urgent attention.`,
+            duration: 8000,
+            className: 'bg-red-50 border-red-200 text-red-900',
+          });
+        }
+        setAccidentLocation(data || null);
+      },
+      (error) => {
+        setIsConnected(false);
+        toast.error('Connection Error', {
+          description: 'Lost connection to emergency database. Attempting to reconnect...',
+        });
+        setAccidentLocation(null);
       }
-    } catch (error) {
-      console.error("Error fetching accident location once:", error);
-    }
-  };
+    );
 
-  // 3. Function to update/set data using 'set'
-  const updateAccidentLocation = async (newLat, newLong) => {
-    const accedentRef = ref(database, 'accedentlocation');
+    return () => unsubscribe();
+  }, [accidentLocation, dataLoaded]); // Keep dataLoaded in dependencies to ensure initial check runs
+
+  const handleDeleteLocation = async () => {
+    if (!database) return;
     try {
-      // 'set' completely overwrites the data at this location
-      await set(accedentRef, { lat: newLat, long: newLong });
-      console.log("Accident location updated successfully!");
-      // The onValue listener will automatically update the UI
+      await remove(ref(database, `accedentlocation`));
+      toast.success('Location Cleared', {
+        description: 'Emergency location data has been successfully removed from the system.',
+      });
+      setAccidentLocation(null);
     } catch (error) {
-      console.error("Error updating accident location:", error);
+      toast.error('Delete Failed',
+        { description: 'Unable to remove location data. Please try again.' }
+      );
     }
   };
 
-  // 4. Function to remove data using 'remove'
-  const removeAccidentLocation = async () => {
-    const accedentRef = ref(database, 'accedentlocation');
-    try {
-      // 'remove' deletes the data at the specified path
-      await remove(accedentRef);
-      console.log("Accident location removed successfully!");
-      // The onValue listener will automatically update the UI to show 'N/A'
-    } catch (error) {
-      console.error("Error removing accident location:", error);
+  // Function to open Google Maps
+  const handleOpenGoogleMaps = () => {
+    if (accidentLocation) {
+      // Correct Google Maps URL format for coordinates
+      const googleMapsUrl = `http://google.com/maps?q=${accidentLocation.lat},${accidentLocation.long}`;
+      window.open(googleMapsUrl, '_blank');
+    } else {
+      toast.info('No Location', {
+        description: 'There is no active accident location to show on Google Maps.',
+      });
     }
   };
 
-  // --- Static data and component structure (unchanged from your code) ---
-
-  const problemStats = [
-    {
-      number: "5L+",
-      label: "Number of Accidents",
-      description: "Total number of accidents in India",
-      color: "text-red-600"
-    },
-    {
-      number: "1.5L+",
-      label: "Annual Deaths",
-      description: "People die in road accidents annually in India",
-      color: "text-red-600"
-    },
-    {
-      number: "90%+",
-      label: "Golden Hour Missed",
-      description: "Road accident victims who don't receive care within the critical 'Golden Hour'",
-      color: "text-red-600"
-    }
-  ];
-
-  const problemReasons = [
-    {
-      title: "Ambulance Arrives Late",
-      description: "Emergency services take too long to reach accident sites",
-      icon: "🚑"
-    },
-    {
-      title: "Hospital Too Far",
-      description: "Remote locations with limited access to medical facilities",
-      icon: "🏥"
-    },
-    {
-      title: "Legal Apprehension",
-      description: "People hesitate to call emergency due to legal complications",
-      icon: "😶"
-    }
-  ];
-
-  const features = [
-    {
-      title: "Manual SOS Button",
-      description: "Instant emergency activation with a single press. Immediately alerts emergency services, hospitals, and family members with your exact location.",
-      image: "sensors/3.png"
-    },
-    {
-      title: "Voice Command System",
-      description: "Say 'Help Help Help' to activate emergency response when physical interaction isn't possible. Advanced voice recognition works even in noisy environments.",
-      image: "/sensors/2.png"
-    },
-    {
-      title: "Automatic Airbag Sensor",
-      description: "Automatically detects airbag deployment and triggers emergency protocols instantly. No manual intervention required during critical moments.",
-      image: "sensors/5.png"
-    },
-    {
-      title: "Impact Detection System",
-      description: "Four-corner impact sensors detect crashes from any angle. Advanced algorithms distinguish between accidents and normal driving conditions.",
-      image: "/sensors/1.png"
-    },
-    {
-      title: "Water Submersion Alert",
-      description: "Specialized water sensors detect vehicle submersion and activate drowning emergency protocols. Critical for water-related accidents.",
-      image: "sensors/4.png"
-    }
-  ];
-
-  const howItWorks = [
-    {
-      step: "01",
-      title: "Detection",
-      description: "Multiple detection methods including manual button, voice commands, impact sensors, airbag deployment, or water submersion",
-      details: "Advanced AI algorithms process sensor data in real-time",
-      image: "/help/1.png"
-    },
-    {
-      step: "02",
-      title: "Alert Processing",
-      description: "Instant alert processing with GPS location, vehicle details, and severity assessment sent to emergency network",
-      details: "Sub-second response time with encrypted data transmission",
-      image: "/help/2.png"
-    },
-    {
-      step: "03",
-      title: "Emergency Dispatch",
-      description: "Simultaneous alerts to hospitals, emergency services, and family members with live location tracking",
-      details: "24/7 monitoring center coordinates immediate response",
-      image: "/help/3.png"
-    },
-    {
-      step: "04",
-      title: "Response & Rescue",
-      description: "Nearest emergency responders dispatched with full accident details and real-time communication established",
-      details: "Average response time reduced by 70% with InfiCare",
-      image: "/help/4.png"
-    }
-  ];
-
-  const products = [
-    {
-      title: "Button System",
-      subtitle: "Manual Emergency Activation",
-      description: "One-touch emergency activation system for immediate help. Perfect for conscious victims who can manually trigger alerts.",
-      features: ["One-touch activation", "GPS location sharing", "Instant family alerts", "24/7 monitoring"],
-      yearlyPrice: 2999,
-      image: "/sensors/3.png",
-      badge: "Most Popular"
-    },
-    {
-      title: "Voice Command",
-      subtitle: "Hands-Free Emergency",
-      description: "Advanced voice recognition system that activates on keywords 'Help Help Help'. Works even when physical interaction isn't possible.",
-      features: ["Voice recognition", "Multiple languages", "Noise filtering", "Offline capability"],
-      yearlyPrice: 4999,
-      image: "/sensors/2.png",
-      badge: "Smart Choice"
-    },
-    {
-      title: "Airbag Sensor",
-      subtitle: "Automatic Crash Detection",
-      description: "Automatically detects airbag deployment and triggers emergency response. No manual action required during accidents.",
-      features: ["Auto airbag detection", "Instant activation", "Crash severity analysis", "Emergency protocols"],
-      yearlyPrice: 6999,
-      image: "sensors/5.png",
-      badge: "Advanced"
-    },
-    {
-      title: "Impact Sensor",
-      subtitle: "360° Crash Protection",
-      description: "Four-corner impact sensors provide comprehensive crash detection from any angle. Advanced algorithms prevent false alarms.",
-      features: ["4-corner sensors", "360° detection", "Impact analysis", "Smart algorithms"],
-      yearlyPrice: 8999,
-      image: "/sensors/1.png",
-      badge: "Professional"
-    },
-    {
-      title: "Water Sensor",
-      subtitle: "Submersion Emergency Alert",
-      description: "Specialized water detection system for drowning emergencies. Activates immediately when vehicle enters water.",
-      features: ["Water detection", "Submersion alerts", "Depth monitoring", "Drowning protocols"],
-      yearlyPrice: 5999,
-      image: "sensors/4.png",
-      badge: "Life Saver"
-    }
-  ];
-
-  const accidentStatsTable = [
-    { year: "2023", accidents: "480,000", deaths: "172,000" },
-    { year: "2022", accidents: "461,312", deaths: "168,491" },
-    { year: "2021", accidents: "412,432", deaths: "153,972" },
-    { year: "2020", accidents: "366,138", deaths: "131,714" },
-  ];
-
-  const scrollToSection = (id) => {
-    document.getElementById(id).scrollIntoView({ behavior: 'smooth' });
-  };
+  if (viewingMap) {
+    return <MapView location={accidentLocation} onBack={() => setViewingMap(false)} />;
+  }
 
   return (
-    <div className="min-h-screen bg-white">
-      {/* Header */}
-      <header className="fixed top-0 left-0 right-0 bg-white/95 backdrop-blur-sm border-b border-gray-100 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div
-              className="flex items-center space-x-3 cursor-pointer"
-              onClick={() => window.location.href = '/'}
-            >
-              <img src="/logo.png" alt="InfiCare Logo" className="h-10 w-auto" />
-              <span className="text-2xl font-bold text-gray-900">InfiCare</span>
-            </div>
-
-            <nav className="hidden md:flex items-center space-x-8">
-              <a href="#problem" className="text-gray-600 hover:text-[#1800ad] transition-colors font-medium">Problem</a>
-              <a href="#features" className="text-gray-600 hover:text-[#1800ad] transition-colors font-medium">Features</a>
-              <a href="#how-it-works" className="text-gray-600 hover:text-[#1800ad] transition-colors font-medium">How It Works</a>
-              <a href="#products" className="text-gray-600 hover:text-[#1800ad] transition-colors font-medium">Products</a>
-            </nav>
-
-            <button
-              onClick={() => scrollToSection('products')}
-              className="bg-[#1800ad] hover:bg-[#1400a0] text-white px-6 py-2.5 rounded-xl transition-all duration-300 font-medium shadow-lg hover:shadow-xl"
-            >
-              View Products
-            </button>
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4 font-[Inter]">
+      <div className="max-w-6xl mx-auto space-y-6">
+        <Toaster position="top-right" richColors /> {/* Toaster position moved to top-right as requested */}
+        {/* Header */}
+        <div className="text-center space-y-4">
+          <div className="flex items-center justify-center gap-3">
+            <AlertTriangle className="h-8 w-8 text-red-500" />
+            <h1 className="text-4xl font-bold text-white">Emergency Response Tracker</h1>
+            <AlertTriangle className="h-8 w-8 text-red-500" />
+          </div>
+          <div className="flex items-center justify-center gap-4">
+            <Badge variant={isConnected ? 'default' : 'destructive'} className="text-sm px-3 py-1">
+              {isConnected ? '🟢 SYSTEM ONLINE' : '🔴 SYSTEM OFFLINE'}
+            </Badge>
+            <Badge variant="outline" className="text-white border-white">
+              Real-Time Monitoring Active
+            </Badge>
           </div>
         </div>
-      </header>
-
-      {/* Hero Section */}
-      <section className="pt-24 pb-20 bg-gradient-to-br from-slate-50 via-white to-purple-50 overflow-hidden">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid lg:grid-cols-2 gap-16 items-center">
-            <div className="space-y-10">
-              <div className="space-y-6">
-                <div className="inline-flex items-center px-4 py-2 rounded-full text-sm font-semibold bg-gradient-to-r from-red-100 to-orange-100 text-red-700">
-                  <Heart className="w-4 h-4 mr-2" />
-                  Because Every Life Matters
-                </div>
-                <h1 className="text-5xl md:text-7xl font-bold text-gray-900 leading-tight">
-                  InfiCare
-                  <span className="block text-3xl md:text-4xl font-medium text-gray-600 mt-2">
-                    Smart Emergency Response System
-                  </span>
-                </h1>
-                <div className="bg-gradient-to-r from-[#1800ad] to-purple-600 bg-clip-text text-transparent">
-                  <p className="text-2xl md:text-3xl font-bold">
-                    Every Second Counts. Every Life Matters.
-                  </p>
-                </div>
-                <p className="text-xl text-gray-600 leading-relaxed max-w-xl">
-                  Revolutionary emergency response system that automatically detects vehicle accidents and instantly connects you to emergency services, hospitals, and loved ones when every second matters most.
-                </p>
-              </div>
-
-              {/* Removed buttons as per original code */}
+        {/* Control Panel */}
+        <Card className="bg-slate-800/50 border-slate-700 rounded-lg">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2">
+              <Navigation className="h-5 w-5 text-blue-400" />
+              Control Center
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-4">
+              <Button
+                onClick={() => setViewingMap(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
+                disabled={!accidentLocation}
+              >
+                <MapPin className="h-4 w-4 mr-2" />
+                View Tactical Map
+              </Button>
+              <Button
+                variant="outline"
+                className="border-slate-600 text-white hover:bg-slate-700 rounded-lg"
+                onClick={() => {
+                  toast.info('System Status', {
+                    description: accidentLocation ?
+                      `Tracking 1 active location. All systems operational.` :
+                      `No active locations. All systems operational.`
+                  });
+                }}
+              >
+                System Status
+              </Button>
             </div>
-
-            <div className="relative">
-              <div className="relative bg-gradient-to-br from-purple-100 via-white to-blue-100 rounded-3xl p-8 shadow-2xl">
-                <div className="bg-white rounded-2xl p-6 shadow-xl">
-                  <img
-                    src="/sos.jpeg"
-                    alt="InfiCare Emergency Device"
-                    className="w-full h-auto object-contain rounded-xl"
-                    style={{ maxHeight: '400px' }}
-                  />
+          </CardContent>
+        </Card>
+        {/* Location Data Display */}
+        {accidentLocation ? (
+          <Card
+            className="bg-slate-800/50 border-slate-700 hover:bg-slate-800/70 transition-all duration-200 rounded-lg"
+          >
+            <CardHeader>
+              <CardTitle className="text-white text-lg flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <MapPin className="h-5 w-5 text-red-500" />
+                  Emergency Location
+                </span>
+                <Badge variant="destructive" className="text-xs rounded-full">
+                  ACTIVE
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="bg-slate-900/50 p-3 rounded-lg">
+                <div className="text-sm text-slate-400 mb-1">User</div>
+                <div className="text-xl font-mono text-white">
+                  Mudassir {/* Displaying the user's name */}
                 </div>
-
-                <div className="absolute -top-6 -right-6 bg-white rounded-2xl p-4 shadow-xl">
-                  <div className="flex items-center space-x-2">
-                    <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-                    <span className="text-sm font-semibold text-gray-700">24/7 Active</span>
+              </div>
+              <div className="space-y-3">
+                <div className="bg-slate-900/50 p-3 rounded-lg">
+                  <div className="text-sm text-slate-400 mb-1">Latitude</div>
+                  <div className="text-xl font-mono text-white">
+                    {accidentLocation.lat?.toFixed(6) || 'N/A'}
                   </div>
                 </div>
-
-                <div className="absolute -bottom-6 -left-6 bg-white rounded-2xl p-4 shadow-xl">
-                  <div className="flex items-center space-x-2">
-                    {/* Removed icons/text as per original code */}
+                <div className="bg-slate-900/50 p-3 rounded-lg">
+                  <div className="text-sm text-slate-400 mb-1">Longitude</div>
+                  <div className="text-xl font-mono text-white">
+                    {accidentLocation.long?.toFixed(6) || 'N/A'}
+                  </div>
+                </div>
+                <div className="bg-slate-900/50 p-3 rounded-lg">
+                  <div className="text-sm text-slate-400 mb-1">Last Update</div>
+                  <div className="text-sm text-white">
+                    {accidentLocation.timestamp
+                      ? new Date(accidentLocation.timestamp).toLocaleString()
+                      : 'Unknown'}
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Problem Statement */}
-      <section id="problem" className="py-20 bg-gradient-to-br from-red-50 to-orange-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center space-y-8 mb-16">
-            <div className="inline-flex items-center px-6 py-3 rounded-full bg-red-100 text-red-700 font-semibold">
-              <AlertTriangle className="w-5 h-5 mr-2" />
-              Critical Emergency: Delayed Response Kills
-            </div>
-            <h2 className="text-4xl md:text-6xl font-bold text-gray-900">
-              The Problem We Solve
-            </h2>
-            <p className="text-xl text-gray-600 max-w-4xl mx-auto leading-relaxed">
-              It's not just the crash that kills — delay in medical help causes preventable deaths.
-              In India, precious minutes are lost when emergency response is delayed.
-            </p>
-          </div>
-
-          {/* Statistics */}
-          <div className="grid md:grid-cols-3 gap-8 mb-16">
-            {problemStats.map((stat, index) => (
-              <div key={index} className="bg-white rounded-2xl p-8 shadow-xl text-center hover:shadow-2xl transition-all duration-300">
-                <div className={`text-5xl font-bold mb-3 ${stat.color}`}>{stat.number}</div>
-                <div className="text-xl font-semibold text-gray-900 mb-2">{stat.label}</div>
-                <p className="text-gray-600">{stat.description}</p>
+              <div className="flex gap-2">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleDeleteLocation}
+                  className="flex-1 rounded-lg"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Clear Data
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 text-white border-green-500 hover:bg-slate-700 bg-blue-500 rounded-lg"
+                  onClick={handleOpenGoogleMaps} // New button for Google Maps
+                >
+                  <Map className="h-4 w-4 mr-2 " />
+                  Open in Google Maps
+                </Button>
               </div>
-            ))}
-          </div>
-
-          {/* Why Delays Happen */}
-          <div className="bg-white rounded-3xl p-8 md:p-12 shadow-2xl mb-16">
-            <h3 className="text-3xl font-bold text-gray-900 text-center mb-12">Why Delays Happen</h3>
-            <div className="grid md:grid-cols-3 gap-8">
-              {problemReasons.map((reason, index) => (
-                <div key={index} className="text-center space-y-4 p-6 rounded-2xl bg-gray-50 hover:bg-gray-100 transition-all duration-300">
-                  <div className="text-6xl mb-4">{reason.icon}</div>
-                  <h4 className="text-xl font-bold text-gray-900">{reason.title}</h4>
-                  <p className="text-gray-600">{reason.description}</p>
-                </div>
-              ))}
-            </div>
-            <div className="text-center mt-12">
-              <div className="inline-flex items-center px-8 py-4 bg-red-600 text-white rounded-2xl font-bold text-xl">
-                <Clock className="w-6 h-6 mr-3" />
-                Seconds Matter — Delay = Death
-              </div>
-            </div>
-          </div>
-
-          {/* Road Accident Statistics */}
-          <div className="bg-white rounded-3xl p-8 md:p-12 shadow-2xl">
-            <div className="text-center space-y-4 mb-8">
-              <h3 className="text-3xl font-bold text-gray-900">Road Accidents in India: A Statistical Overview (2020-2023)</h3>
-              <p className="text-lg text-gray-600 max-w-3xl mx-auto">
-                India has faced significant challenges in road safety. The following data from government sources highlights the trends in road accidents and fatalities.
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="bg-slate-800/50 border-slate-700 rounded-lg">
+            <CardContent className="py-12 text-center">
+              <MapPin className="h-12 w-12 text-slate-600 mx-auto mb-4" />
+              <p className="text-slate-400 text-lg">No active emergency locations detected</p>
+              <p className="text-slate-500 text-sm mt-2">
+                Monitoring system is active and ready for incidents
               </p>
+            </CardContent>
+          </Card>
+        )}
+        {/* Emergency Info */}
+        <Card className="bg-red-900/20 border-red-800 rounded-lg">
+          <CardHeader>
+            <CardTitle className="text-red-400 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5" />
+              Emergency Response Protocol
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-red-200 space-y-2">
+              <p>• All location updates trigger automatic emergency notifications</p>
+              <p>• Response teams are dispatched immediately upon incident detection</p>
+              <p>• Use tactical map view for enhanced situational awareness</p>
+              <p>• Clear location data only after incident resolution</p>
             </div>
-
-            <div className="overflow-x-auto">
-              <table className="min-w-full bg-white rounded-xl overflow-hidden shadow-lg border border-gray-200">
-                <thead className="bg-[#1800ad] text-white">
-                  <tr>
-                    <th className="py-4 px-6 text-left text-sm font-semibold uppercase tracking-wider rounded-tl-xl">Year</th>
-                    <th className="py-4 px-6 text-left text-sm font-semibold uppercase tracking-wider">Number of Accidents</th>
-                    <th className="py-4 px-6 text-left text-sm font-semibold uppercase tracking-wider rounded-tr-xl">Number of Deaths</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {accidentStatsTable.map((row, index) => (
-                    <tr key={index} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
-                      <td className="py-4 px-6 whitespace-nowrap text-base font-medium text-gray-900">{row.year}</td>
-                      <td className="py-4 px-6 whitespace-nowrap text-base text-gray-700">{row.accidents}</td>
-                      <td className="py-4 px-6 whitespace-nowrap text-base text-gray-700">{row.deaths}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="text-sm text-gray-500 mt-6 text-center">
-              Note: Data for 2023 is preliminary. Official nationwide data for 2024 and 2025 is not yet available and currently based on projections.
-            </p>
-          </div>
-
-        </div>
-      </section>
-
-      {/* Displaying Accident Location */}
-      <section id="accident-location" className="py-16 bg-gradient-to-br from-indigo-50 to-blue-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <div className="inline-flex items-center px-6 py-3 rounded-full bg-blue-100 text-blue-700 font-semibold mb-8">
-            <MapPin className="w-5 h-5 mr-2" />
-            Detected Accident Location
-          </div>
-          <h2 className="text-3xl md:text-5xl font-bold text-gray-900 mb-6">
-            Latest Accident Coordinates
-          </h2>
-          <div className="bg-white rounded-3xl p-8 shadow-2xl inline-block">
-            <div className="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-8">
-              <div className="flex items-center space-x-2 text-gray-700 text-xl">
-                <span className="font-semibold">Latitude:</span>
-                <span className="text-gray-900 font-bold">{accedentLocation.lat}</span>
-              </div>
-              <div className="flex items-center space-x-2 text-gray-700 text-xl">
-                <span className="font-semibold">Longitude:</span>
-                <span className="text-gray-900 font-bold">{accedentLocation.long}</span>
-              </div>
-            </div>
-            <p className="text-sm text-gray-500 mt-4">
-              These coordinates represent the location of the most recently recorded accident.
-            </p>
-            {/* Buttons to demonstrate the new Firebase functions */}
-            <div className="mt-6 flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4">
-              <button
-                onClick={fetchAccidentLocationOnce}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl transition-all duration-300 font-medium"
-              >
-                Fetch Location Once
-              </button>
-              <button
-                onClick={() => updateAccidentLocation("20.0000000000", "73.0000000000")}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl transition-all duration-300 font-medium"
-              >
-                Update Location (Test)
-              </button>
-              <button
-                onClick={removeAccidentLocation}
-                className="bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-xl transition-all duration-300 font-medium"
-              >
-                Remove Location
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Features Section */}
-      <section id="features" className="py-20 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center space-y-8 mb-16">
-            <div className="inline-flex items-center px-6 py-3 rounded-full bg-blue-100 text-blue-700 font-semibold">
-              <Zap className="w-5 h-5 mr-2" />
-              Advanced Safety Technology
-            </div>
-            <h2 className="text-4xl md:text-6xl font-bold text-gray-900">
-              Multiple Detection Methods
-            </h2>
-            <p className="text-xl text-gray-600 max-w-4xl mx-auto leading-relaxed">
-              Five different ways to detect emergencies and trigger instant response.
-              Because every situation is different, and every life matters.
-            </p>
-          </div>
-
-          <div className="space-y-16">
-            {features.map((feature, index) => (
-              <div key={index} className={`grid lg:grid-cols-2 gap-12 items-center ${index % 2 === 1 ? 'lg:grid-flow-col-dense' : ''}`}>
-                <div className={`space-y-6 ${index % 2 === 1 ? 'lg:col-start-2' : ''}`}>
-                  <div className="inline-flex items-center px-4 py-2 rounded-full bg-purple-100 text-purple-700 font-semibold text-sm">
-                    <Target className="w-4 h-4 mr-2" />
-                    Detection Method {index + 1}
-                  </div>
-                  <h3 className="text-3xl md:text-4xl font-bold text-gray-900">{feature.title}</h3>
-                  <p className="text-xl text-gray-600 leading-relaxed">{feature.description}</p>
-                  <button className="bg-[#1800ad] hover:bg-[#1400a0] text-white px-6 py-3 rounded-xl transition-all duration-300 font-semibold">
-                    Learn More
-                  </button>
-                </div>
-                <div className={`${index % 2 === 1 ? 'lg:col-start-1' : ''}`}>
-                  <div className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-2xl p-8 shadow-xl">
-                    <img
-                      src={feature.image || "/placeholder.svg"}
-                      alt={feature.title}
-                      className="w-full h-auto rounded-xl shadow-lg"
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* How It Works Section */}
-      <section id="how-it-works" className="py-20 bg-gradient-to-br from-blue-50 via-purple-50 to-indigo-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center space-y-8 mb-16">
-            <div className="inline-flex items-center px-6 py-3 rounded-full bg-green-100 text-green-700 font-semibold">
-              <TrendingUp className="w-5 h-5 mr-2" />
-              Proven Emergency Response Process
-            </div>
-            <h2 className="text-4xl md:text-6xl font-bold text-gray-900">
-              How InfiCare Saves Lives
-            </h2>
-            <p className="text-xl text-gray-600 max-w-4xl mx-auto leading-relaxed">
-              From detection to rescue in under 60 seconds. Our automated process ensures
-              help reaches you faster than ever before.
-            </p>
-          </div>
-
-          <div className="relative">
-            {/* Timeline Line */}
-            <div className="absolute left-1/2 transform -translate-x-1/2 w-1 h-full bg-gradient-to-b from-[#1800ad] to-purple-600 rounded-full hidden lg:block"></div>
-
-            <div className="space-y-16">
-              {howItWorks.map((step, index) => (
-                <div key={index} className={`grid lg:grid-cols-2 gap-12 items-center relative ${index % 2 === 1 ? 'lg:grid-flow-col-dense' : ''}`}>
-                  {/* Timeline Node */}
-                  <div className="absolute left-1/2 transform -translate-x-1/2 w-16 h-16 bg-white rounded-full border-4 border-[#1800ad] flex items-center justify-center font-bold text-[#1800ad] text-lg shadow-xl hidden lg:flex z-10">
-                    {step.step}
-                  </div>
-
-                  <div className={`bg-white rounded-3xl p-8 shadow-2xl hover:shadow-3xl transition-all duration-300 ${index % 2 === 1 ? 'lg:col-start-2 lg:ml-8' : 'lg:mr-8'}`}>
-                    <div className="space-y-6">
-                      <div className="flex items-center space-x-4">
-                        <div className="w-12 h-12 bg-[#1800ad] text-white rounded-xl flex items-center justify-center font-bold text-lg lg:hidden">
-                          {step.step}
-                        </div>
-                        <h3 className="text-2xl md:text-3xl font-bold text-gray-900">{step.title}</h3>
-                      </div>
-                      <p className="text-lg text-gray-600 leading-relaxed">{step.description}</p>
-                      <div className="bg-gradient-to-r from-purple-100 to-blue-100 rounded-xl p-4">
-                        <p className="text-sm font-semibold text-purple-700">{step.details}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className={`${index % 2 === 1 ? 'lg:col-start-1' : ''}`}>
-                    <div className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-2xl p-8 shadow-xl">
-                      <img
-                        src={step.image}
-                        alt={`Step ${index + 1}: ${step.title}`}
-                        className="w-full h-auto rounded-xl"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Products Section */}
-      <section id="products" className="py-20 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center space-y-8 mb-16">
-            <div className="inline-flex items-center px-6 py-3 rounded-full bg-orange-100 text-orange-700 font-semibold">
-              <Award className="w-5 h-5 mr-2" />
-              Professional Emergency Solutions
-            </div>
-            <h2 className="text-4xl md:text-6xl font-bold text-gray-900">
-              Our Products
-            </h2>
-            <p className="text-xl text-gray-600 max-w-4xl mx-auto leading-relaxed">
-              Choose the perfect emergency response system for your vehicle.
-              Each product is designed to save lives in different emergency scenarios.
-            </p>
-          </div>
-
-          <div className="grid lg:grid-cols-3 gap-8">
-            {products.map((product, index) => {
-              const displayedPrice = `₹${product.yearlyPrice.toLocaleString('en-IN')}`;
-              const priceSuffix = '/year';
-
-              return (
-                <div key={index} className="group relative bg-gradient-to-br from-gray-50 to-gray-100 rounded-3xl p-8 shadow-xl hover:shadow-2xl transition-all duration-500 hover:scale-105 border border-gray-200">
-                  {/* Badge */}
-                  <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
-                    <div className="bg-[#1800ad] text-white px-4 py-2 rounded-full text-sm font-bold shadow-lg">
-                      {product.badge}
-                    </div>
-                  </div>
-
-                  <div className="space-y-6 pt-4">
-                    {/* Product Image */}
-                    <div className="bg-white rounded-2xl p-6 shadow-lg group-hover:shadow-xl transition-all duration-300">
-                      <img
-                        src={product.image || "/placeholder.svg"}
-                        alt={product.title}
-                        className="w-full h-48 object-contain rounded-xl"
-                      />
-                    </div>
-
-                    {/* Product Info */}
-                    <div className="space-y-4">
-                      <div>
-                        <h3 className="text-2xl font-bold text-gray-900">{product.title}</h3>
-                        <p className="text-lg text-[#1800ad] font-semibold">{product.subtitle}</p>
-                      </div>
-                      <p className="text-gray-600 leading-relaxed">{product.description}</p>
-                    </div>
-
-                    {/* Features */}
-                    <div className="space-y-3">
-                      {product.features.map((feature, featureIndex) => (
-                        <div key={featureIndex} className="flex items-center text-gray-700">
-                          <CheckCircle className="w-5 h-5 text-green-500 mr-3 flex-shrink-0" />
-                          <span className="text-sm font-medium">{feature}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Pricing */}
-                    <div className="pt-6 border-t border-gray-200">
-                      <div className="text-center space-y-4">
-                        <div className="text-5xl font-bold text-gray-900">
-                          {displayedPrice}
-                          <span className="text-xl text-gray-600">{priceSuffix}</span>
-                        </div>
-                        <div className="text-sm text-gray-500">Subscription + Installation fees apply</div>
-                        <button className="w-full bg-[#1800ad] hover:bg-[#1400a0] text-white py-4 rounded-xl transition-all duration-300 font-bold text-lg shadow-lg hover:shadow-xl group-hover:scale-105">
-                          Order Now
-                          <ArrowRight className="inline w-5 h-5 ml-2" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer className="bg-gray-900 text-white py-16">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid md:grid-cols-4 gap-8">
-            <div className="space-y-6">
-              <div className="flex items-center space-x-3">
-                <span className="text-2xl font-bold">InfiCare</span>
-              </div>
-              <p className="text-gray-400 leading-relaxed">
-                Because Every Life Matters. Advanced emergency response system protecting lives across India with cutting-edge detection technology.
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              <h4 className="text-lg font-semibold">Product</h4>
-              <div className="space-y-3">
-                <a onClick={() => scrollToSection('products')} className="text-gray-400 hover:text-white transition-colors cursor-pointer">Emergency Systems</a>
-                <a onClick={() => scrollToSection('features')} className="text-gray-400 hover:text-white transition-colors cursor-pointer">Detection Methods</a>
-                <a onClick={() => scrollToSection('how-it-works')} className="text-gray-400 hover:text-white transition-colors cursor-pointer">Response Process</a>
-                <a onClick={() => scrollToSection('products')} className="text-gray-400 hover:text-white transition-colors cursor-pointer">Installation</a>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h4 className="text-lg font-semibold">Support</h4>
-              <div className="space-y-3">
-                <a href="#" className="text-gray-400 hover:text-white transition-colors cursor-pointer">Emergency Help</a>
-                <a href="#" className="text-gray-400 hover:text-white transition-colors cursor-pointer">Technical Support</a>
-                <a href="#" className="text-gray-400 hover:text-white transition-colors cursor-pointer">Warranty</a>
-                <a href="#" className="text-gray-400 hover:text-white transition-colors cursor-pointer">Service Centers</a>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h4 className="text-lg font-semibold">Emergency Contact</h4>
-              <div className="space-y-3">
-                <div className="text-gray-400">24/7 Emergency Hotline:</div>
-                <div className="text-white font-bold text-xl">+91 99583 99157</div>
-                <div className="text-gray-400">Every Second Counts</div>
-              </div>
-            </div>
-          </div>
-
-          <div className="border-t border-gray-800 mt-12 pt-8 text-center text-gray-400">
-            <p>&copy; 2025 InfiCare. All rights reserved. Every Second Counts. Every Life Matters.</p>
-          </div>
-        </div>
-      </footer>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
-
-export default App;
