@@ -1,14 +1,89 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+// Correctly importing app and database instances from your specified path
+import { app, database } from '../lib/firebase';
+import { ref, onValue, remove, set, get } from 'firebase/database';
 import { Shield, Phone, Heart, Zap, AlertTriangle, MapPin, Clock, Users, CheckCircle, Star, ArrowRight, Car, Bike, Droplets, Mic, Bell, Waves, Cpu, Volume2, Send, Play, TrendingUp, Award, Target } from 'lucide-react';
 
 function App() {
-  // State for pricing toggle (no longer used, but keeping useState import for future flexibility)
+  // State to hold the accident location data
+  const [accedentLocation, setAccedentLocation] = useState({ lat: "Loading...", long: "Loading..." });
 
-  // Accident Location from the prompt
-  const accedentLocation = {
-    lat: "19.1909161000",
-    long: "72.8348875000"
+  // --- Firebase Data Operations ---
+
+  // 1. Real-time listener using 'onValue'
+  // This effect runs once on component mount to listen for real-time changes
+  useEffect(() => {
+    // Create a reference to the 'accedentlocation' path in the database
+    const accedentRef = ref(database, 'accedentlocation');
+
+    // Attach a real-time listener to the reference
+    onValue(accedentRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        // If data exists, update the component's state
+        setAccedentLocation(data);
+      } else {
+        // If no data exists, set a default state
+        console.log("No accident location data available in real-time.");
+        setAccedentLocation({ lat: "N/A", long: "N/A" });
+      }
+    }, (error) => {
+      // Handle any errors during the fetch
+      console.error("Error fetching accident location in real-time:", error);
+      setAccedentLocation({ lat: "Error", long: "Error" });
+    });
+
+    // The return function is a cleanup function.
+    // It's good practice for detaching listeners to prevent memory leaks,
+    // though in this simple case it's not strictly required.
+    return () => {}; 
+  }, []); // The empty dependency array ensures this effect runs only once
+
+  // 2. Function to fetch data once using 'get'
+  const fetchAccidentLocationOnce = async () => {
+    const accedentRef = ref(database, 'accedentlocation');
+    try {
+      const snapshot = await get(accedentRef);
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        console.log("Accident location fetched once:", data);
+        // This log will appear in the console. You can use this data
+        // to update state or for other one-time operations.
+      } else {
+        console.log("No accident location data available on single fetch.");
+      }
+    } catch (error) {
+      console.error("Error fetching accident location once:", error);
+    }
   };
+
+  // 3. Function to update/set data using 'set'
+  const updateAccidentLocation = async (newLat, newLong) => {
+    const accedentRef = ref(database, 'accedentlocation');
+    try {
+      // 'set' completely overwrites the data at this location
+      await set(accedentRef, { lat: newLat, long: newLong });
+      console.log("Accident location updated successfully!");
+      // The onValue listener will automatically update the UI
+    } catch (error) {
+      console.error("Error updating accident location:", error);
+    }
+  };
+
+  // 4. Function to remove data using 'remove'
+  const removeAccidentLocation = async () => {
+    const accedentRef = ref(database, 'accedentlocation');
+    try {
+      // 'remove' deletes the data at the specified path
+      await remove(accedentRef);
+      console.log("Accident location removed successfully!");
+      // The onValue listener will automatically update the UI to show 'N/A'
+    } catch (error) {
+      console.error("Error removing accident location:", error);
+    }
+  };
+
+  // --- Static data and component structure (unchanged from your code) ---
 
   const problemStats = [
     {
@@ -114,7 +189,7 @@ function App() {
       subtitle: "Manual Emergency Activation",
       description: "One-touch emergency activation system for immediate help. Perfect for conscious victims who can manually trigger alerts.",
       features: ["One-touch activation", "GPS location sharing", "Instant family alerts", "24/7 monitoring"],
-      yearlyPrice: 2999, // Now storing only yearly price
+      yearlyPrice: 2999,
       image: "/sensors/3.png",
       badge: "Most Popular"
     },
@@ -123,7 +198,7 @@ function App() {
       subtitle: "Hands-Free Emergency",
       description: "Advanced voice recognition system that activates on keywords 'Help Help Help'. Works even when physical interaction isn't possible.",
       features: ["Voice recognition", "Multiple languages", "Noise filtering", "Offline capability"],
-      yearlyPrice: 4999, // Now storing only yearly price
+      yearlyPrice: 4999,
       image: "/sensors/2.png",
       badge: "Smart Choice"
     },
@@ -132,7 +207,7 @@ function App() {
       subtitle: "Automatic Crash Detection",
       description: "Automatically detects airbag deployment and triggers emergency response. No manual action required during accidents.",
       features: ["Auto airbag detection", "Instant activation", "Crash severity analysis", "Emergency protocols"],
-      yearlyPrice: 6999, // Now storing only yearly price
+      yearlyPrice: 6999,
       image: "sensors/5.png",
       badge: "Advanced"
     },
@@ -141,7 +216,7 @@ function App() {
       subtitle: "360° Crash Protection",
       description: "Four-corner impact sensors provide comprehensive crash detection from any angle. Advanced algorithms prevent false alarms.",
       features: ["4-corner sensors", "360° detection", "Impact analysis", "Smart algorithms"],
-      yearlyPrice: 8999, // Now storing only yearly price
+      yearlyPrice: 8999,
       image: "/sensors/1.png",
       badge: "Professional"
     },
@@ -150,13 +225,12 @@ function App() {
       subtitle: "Submersion Emergency Alert",
       description: "Specialized water detection system for drowning emergencies. Activates immediately when vehicle enters water.",
       features: ["Water detection", "Submersion alerts", "Depth monitoring", "Drowning protocols"],
-      yearlyPrice: 5999, // Now storing only yearly price
+      yearlyPrice: 5999,
       image: "sensors/4.png",
       badge: "Life Saver"
     }
   ];
 
-  // Data for Road Accident Statistics table
   const accidentStatsTable = [
     { year: "2023", accidents: "480,000", deaths: "172,000" },
     { year: "2022", accidents: "461,312", deaths: "168,491" },
@@ -164,7 +238,6 @@ function App() {
     { year: "2020", accidents: "366,138", deaths: "131,714" },
   ];
 
-  // Function to handle smooth scrolling
   const scrollToSection = (id) => {
     document.getElementById(id).scrollIntoView({ behavior: 'smooth' });
   };
@@ -190,7 +263,6 @@ function App() {
               <a href="#products" className="text-gray-600 hover:text-[#1800ad] transition-colors font-medium">Products</a>
             </nav>
 
-            {/* Updated onClick to scroll to products section */}
             <button
               onClick={() => scrollToSection('products')}
               className="bg-[#1800ad] hover:bg-[#1400a0] text-white px-6 py-2.5 rounded-xl transition-all duration-300 font-medium shadow-lg hover:shadow-xl"
@@ -344,7 +416,7 @@ function App() {
         </div>
       </section>
 
-      {/* Displaying Accident Location (New Section) */}
+      {/* Displaying Accident Location */}
       <section id="accident-location" className="py-16 bg-gradient-to-br from-indigo-50 to-blue-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <div className="inline-flex items-center px-6 py-3 rounded-full bg-blue-100 text-blue-700 font-semibold mb-8">
@@ -368,6 +440,27 @@ function App() {
             <p className="text-sm text-gray-500 mt-4">
               These coordinates represent the location of the most recently recorded accident.
             </p>
+            {/* Buttons to demonstrate the new Firebase functions */}
+            <div className="mt-6 flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4">
+              <button
+                onClick={fetchAccidentLocationOnce}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl transition-all duration-300 font-medium"
+              >
+                Fetch Location Once
+              </button>
+              <button
+                onClick={() => updateAccidentLocation("20.0000000000", "73.0000000000")}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl transition-all duration-300 font-medium"
+              >
+                Update Location (Test)
+              </button>
+              <button
+                onClick={removeAccidentLocation}
+                className="bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-xl transition-all duration-300 font-medium"
+              >
+                Remove Location
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -418,7 +511,7 @@ function App() {
         </div>
       </section>
 
-      {/* How It Works Section - RESTORED */}
+      {/* How It Works Section */}
       <section id="how-it-works" className="py-20 bg-gradient-to-br from-blue-50 via-purple-50 to-indigo-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center space-y-8 mb-16">
@@ -454,7 +547,7 @@ function App() {
                           {step.step}
                         </div>
                         <h3 className="text-2xl md:text-3xl font-bold text-gray-900">{step.title}</h3>
-                      </div> {/* Moved title inside this div for better alignment */}
+                      </div>
                       <p className="text-lg text-gray-600 leading-relaxed">{step.description}</p>
                       <div className="bg-gradient-to-r from-purple-100 to-blue-100 rounded-xl p-4">
                         <p className="text-sm font-semibold text-purple-700">{step.details}</p>
@@ -478,7 +571,6 @@ function App() {
         </div>
       </section>
 
-
       {/* Products Section */}
       <section id="products" className="py-20 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -494,14 +586,11 @@ function App() {
               Choose the perfect emergency response system for your vehicle.
               Each product is designed to save lives in different emergency scenarios.
             </p>
-
-            {/* Monthly/Yearly Toggle - REMOVED as pricing is only yearly now */}
-
           </div>
 
           <div className="grid lg:grid-cols-3 gap-8">
             {products.map((product, index) => {
-              const displayedPrice = `₹${product.yearlyPrice.toLocaleString('en-IN')}`; // Always yearly
+              const displayedPrice = `₹${product.yearlyPrice.toLocaleString('en-IN')}`;
               const priceSuffix = '/year';
 
               return (
@@ -549,7 +638,7 @@ function App() {
                           {displayedPrice}
                           <span className="text-xl text-gray-600">{priceSuffix}</span>
                         </div>
-                        <div className="text-sm text-gray-500">Subscription + Installation fees apply</div> {/* Updated pricing note */}
+                        <div className="text-sm text-gray-500">Subscription + Installation fees apply</div>
                         <button className="w-full bg-[#1800ad] hover:bg-[#1400a0] text-white py-4 rounded-xl transition-all duration-300 font-bold text-lg shadow-lg hover:shadow-xl group-hover:scale-105">
                           Order Now
                           <ArrowRight className="inline w-5 h-5 ml-2" />
@@ -564,13 +653,12 @@ function App() {
         </div>
       </section>
 
-      {/* Footer (updated) */}
+      {/* Footer */}
       <footer className="bg-gray-900 text-white py-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid md:grid-cols-4 gap-8">
             <div className="space-y-6">
               <div className="flex items-center space-x-3">
-                {/* Consider adding logo here if available, e.g., <img src="/logo.png" alt="InfiCare Logo" className="h-10 w-auto" /> */}
                 <span className="text-2xl font-bold">InfiCare</span>
               </div>
               <p className="text-gray-400 leading-relaxed">
