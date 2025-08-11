@@ -87,8 +87,8 @@ const MapView = dynamic(() => import('react-leaflet').then(mod => {
       if (location && markerRef.current) {
         const prevLocation = prevLocationRef.current;
         const coordsChanged = !prevLocation ||
-                              location.lat !== prevLocation.lat ||
-                              location.long !== prevLocation.long;
+                               location.lat !== prevLocation.lat ||
+                               location.long !== prevLocation.long;
 
         if (coordsChanged) {
           markerRef.current.openPopup();
@@ -152,14 +152,15 @@ export default function Home() {
     const checkAndSetInitialData = async () => {
       try {
         const snapshot = await get(accidentLocationRef);
-        if (!snapshot.exists()) {
-          // Only set initial dummy data if no data exists
+        // Only set initial dummy data if no data exists or if existing data is malformed
+        const existingData = snapshot.val();
+        if (!existingData || typeof existingData.lat !== 'string' || typeof existingData.long !== 'string' || typeof existingData.timestamp !== 'number') {
           await set(accidentLocationRef, {
-            lat: 19.09719,
-            long: 72.88258,
+            lat: "19.09719", // Set as string to match your Firebase data type
+            long: "72.88258", // Set as string to match your Firebase data type
             timestamp: Date.now(),
           });
-          console.log("Initial dummy accident location set.");
+          console.log("Initial dummy accident location set or corrected.");
         }
       } catch (error) {
         console.error("Error checking or setting initial data:", error);
@@ -182,17 +183,38 @@ export default function Home() {
         setIsConnected(true);
         const data = snapshot.val();
 
-        // This toast logic still relies on timestamp change to avoid spamming toasts
-        // for every minor data change if the timestamp isn't updated by the source.
-        // The map popup will now trigger on lat/long change.
-        if (data && (accidentLocation?.timestamp !== data.timestamp)) {
-          toast.error('🚨 EMERGENCY ALERT', {
-            description: `Incident detected at coordinates ${data.lat?.toFixed(6)}, ${data.long?.toFixed(6)}. Emergency responders dispatched immediately. Proceed with caution - situation requires urgent attention.`,
-            duration: 8000,
-            className: 'bg-red-50 border-red-200 text-red-900',
-          });
+        // **CRITICAL FIX:** Validate and convert lat/long from string to number
+        if (data && typeof data.lat === 'string' && typeof data.long === 'string' && typeof data.timestamp === 'number') {
+          const numericLat = parseFloat(data.lat);
+          const numericLong = parseFloat(data.long);
+
+          if (!isNaN(numericLat) && !isNaN(numericLong)) {
+            const processedData: LocationData = {
+              lat: numericLat,
+              long: numericLong,
+              timestamp: data.timestamp,
+            };
+
+            // This toast logic still relies on timestamp change to avoid spamming toasts
+            // for every minor data change if the timestamp isn't updated by the source.
+            // The map popup will now trigger on lat/long change.
+            if (accidentLocation?.timestamp !== processedData.timestamp) {
+              toast.error('🚨 EMERGENCY ALERT', {
+                description: `Incident detected at coordinates ${processedData.lat.toFixed(6)}, ${processedData.long.toFixed(6)}. Emergency responders dispatched immediately. Proceed with caution - situation requires urgent attention.`,
+                duration: 8000,
+                className: 'bg-red-50 border-red-200 text-red-900',
+              });
+            }
+            setAccidentLocation(processedData);
+          } else {
+            console.warn("Received non-numeric lat/long strings for accident location:", data);
+            setAccidentLocation(null); // Set to null if data is invalid after parsing
+          }
+        } else {
+            // If data is null or not in the expected format (e.g., timestamp missing), set accidentLocation to null
+            console.warn("Received malformed or null accident location data:", data);
+            setAccidentLocation(null);
         }
-        setAccidentLocation(data || null);
       },
       (error) => {
         setIsConnected(false);
@@ -223,9 +245,9 @@ export default function Home() {
 
   // Function to open Google Maps
   const handleOpenGoogleMaps = () => {
-    if (accidentLocation) {
+    if (accidentLocation && typeof accidentLocation.lat === 'number' && typeof accidentLocation.long === 'number') {
       // Correct Google Maps URL format for coordinates
-      const googleMapsUrl = `http://google.com/maps?q=${accidentLocation.lat},${accidentLocation.long}`;
+      const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${accidentLocation.lat},${accidentLocation.long}`;
       window.open(googleMapsUrl, '_blank');
     } else {
       toast.info('No Location', {
@@ -319,13 +341,15 @@ export default function Home() {
                 <div className="bg-slate-900/50 p-3 rounded-lg">
                   <div className="text-sm text-slate-400 mb-1">Latitude</div>
                   <div className="text-xl font-mono text-white">
-                    {accidentLocation.lat?.toFixed(6) || 'N/A'}
+                    {/* Fixed: Now accidentLocation.lat is guaranteed to be a number if accidentLocation exists */}
+                    {accidentLocation.lat.toFixed(6) || 'N/A'}
                   </div>
                 </div>
                 <div className="bg-slate-900/50 p-3 rounded-lg">
                   <div className="text-sm text-slate-400 mb-1">Longitude</div>
                   <div className="text-xl font-mono text-white">
-                    {accidentLocation.long?.toFixed(6) || 'N/A'}
+                    {/* Fixed: Now accidentLocation.long is guaranteed to be a number if accidentLocation exists */}
+                    {accidentLocation.long.toFixed(6) || 'N/A'}
                   </div>
                 </div>
                 <div className="bg-slate-900/50 p-3 rounded-lg">
