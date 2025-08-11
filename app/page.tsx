@@ -1,3 +1,4 @@
+"use  client"
 import React, { useState, useEffect } from 'react';
 // Correctly importing app and database instances from your specified path
 import { app, database } from '../lib/firebase';
